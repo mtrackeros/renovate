@@ -267,7 +267,7 @@ function getRepoUrl(
     res.body.http_url_to_repo === null
   ) {
     if (res.body.http_url_to_repo === null) {
-      logger.debug('no http_url_to_repo found. Falling back to old behaviour.');
+      logger.debug('no http_url_to_repo found. Falling back to old behavior.');
     }
     if (process.env.GITLAB_IGNORE_REPO_URL) {
       logger.warn(
@@ -648,12 +648,12 @@ async function tryPrAutomerge(
   pr: number,
   platformOptions: PlatformPrOptions | undefined,
 ): Promise<void> {
-  if (platformOptions?.usePlatformAutomerge) {
-    try {
-      if (platformOptions?.gitLabIgnoreApprovals) {
-        await ignoreApprovals(pr);
-      }
+  try {
+    if (platformOptions?.gitLabIgnoreApprovals) {
+      await ignoreApprovals(pr);
+    }
 
+    if (platformOptions?.usePlatformAutomerge) {
       // https://docs.gitlab.com/ee/api/merge_requests.html#merge-status
       const desiredDetailedMergeStatus = [
         'mergeable',
@@ -730,9 +730,9 @@ async function tryPrAutomerge(
         }
         await setTimeout(mergeDelay * attempt ** 2); // exponential backoff
       }
-    } catch (err) /* istanbul ignore next */ {
-      logger.debug({ err }, 'Automerge on PR creation failed');
     }
+  } catch (err) /* istanbul ignore next */ {
+    logger.debug({ err }, 'Automerge on PR creation failed');
   }
 }
 
@@ -818,6 +818,8 @@ export async function updatePr({
   number: iid,
   prTitle,
   prBody: description,
+  addLabels,
+  removeLabels,
   state,
   platformOptions,
   targetBranch,
@@ -839,6 +841,14 @@ export async function updatePr({
   };
   if (targetBranch) {
     body.target_branch = targetBranch;
+  }
+
+  if (addLabels) {
+    body.add_labels = addLabels;
+  }
+
+  if (removeLabels) {
+    body.remove_labels = removeLabels;
   }
 
   await gitlabApi.putJson(
@@ -1059,11 +1069,14 @@ export async function setBranchStatus({
 
 export async function getIssueList(): Promise<GitlabIssue[]> {
   if (!config.issueList) {
-    const query = getQueryString({
+    const searchParams: Record<string, string> = {
       per_page: '100',
-      scope: 'created_by_me',
       state: 'opened',
-    });
+    };
+    if (!config.ignorePrAuthor) {
+      searchParams.scope = 'created_by_me';
+    }
+    const query = getQueryString(searchParams);
     const res = await gitlabApi.getJson<
       { iid: number; title: string; labels: string[] }[]
     >(`projects/${config.repository}/issues?${query}`, {
@@ -1204,7 +1217,13 @@ export async function addAssignees(
     logger.debug(`Adding assignees '${assignees.join(', ')}' to #${iid}`);
     const assigneeIds: number[] = [];
     for (const assignee of assignees) {
-      assigneeIds.push(await getUserID(assignee));
+      try {
+        const userId = await getUserID(assignee);
+        assigneeIds.push(userId);
+      } catch (err) {
+        logger.debug({ assignee, err }, 'getUserID() error');
+        logger.warn({ assignee }, 'Failed to add assignee - could not get ID');
+      }
     }
     const url = `projects/${
       config.repository
